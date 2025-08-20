@@ -20,4 +20,11 @@ const Map<String, String> zhTW = {
   'home': '首頁',
   'news': '新聞',
   'weather': '天氣',
+  'sticky': '固定式',
+  'end': '末端式',
+  'workspaceNameLabel': '工作區名稱',
+  'workspaceUrlLabel': '工作區網址',
+  'newWorkspace': '新增工作區',
+  'add': '新增',
+  'cancel': '取消',
 };

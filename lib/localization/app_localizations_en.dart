@@ -20,4 +20,11 @@ const Map<String, String> en = {
   'home': 'Home',
   'news': 'News',
   'weather': 'Weather',
+  'sticky': 'Sticky',
+  'end': 'End',
+  'workspaceNameLabel': 'Workspace Name',
+  'workspaceUrlLabel': 'Workspace URL',
+  'newWorkspace': 'New Workspace',
+  'add': 'Add',
+  'cancel': 'Cancel',
 };

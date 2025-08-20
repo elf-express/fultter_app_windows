@@ -2,7 +2,6 @@
 
 import 'package:fluent_ui/fluent_ui.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_acrylic/flutter_acrylic.dart';
 import 'package:provider/provider.dart';
 
 import '../theme/app_theme.dart';
@@ -11,7 +10,6 @@ import '../localization/app_localizations.dart';
 
 
 const List<String> accentColorNames = [
-  'System',
   'Yellow',
   'Orange',
   'Red',
@@ -31,50 +29,6 @@ bool get kIsWindowEffectsSupported {
       ].contains(defaultTargetPlatform);
 }
 
-const _LinuxWindowEffects = [WindowEffect.disabled, WindowEffect.transparent];
-
-const _WindowsWindowEffects = [
-  WindowEffect.disabled,
-  WindowEffect.solid,
-  WindowEffect.transparent,
-  WindowEffect.aero,
-  WindowEffect.acrylic,
-  WindowEffect.mica,
-  WindowEffect.tabbed,
-];
-
-const _MacosWindowEffects = [
-  WindowEffect.disabled,
-  WindowEffect.titlebar,
-  WindowEffect.selection,
-  WindowEffect.menu,
-  WindowEffect.popover,
-  WindowEffect.sidebar,
-  WindowEffect.headerView,
-  WindowEffect.sheet,
-  WindowEffect.windowBackground,
-  WindowEffect.hudWindow,
-  WindowEffect.fullScreenUI,
-  WindowEffect.toolTip,
-  WindowEffect.contentBackground,
-  WindowEffect.underWindowBackground,
-  WindowEffect.underPageBackground,
-];
-
-List<WindowEffect> get currentWindowEffects {
-  if (kIsWeb) return [];
-
-  if (defaultTargetPlatform == TargetPlatform.windows) {
-    return _WindowsWindowEffects;
-  } else if (defaultTargetPlatform == TargetPlatform.linux) {
-    return _LinuxWindowEffects;
-  } else if (defaultTargetPlatform == TargetPlatform.macOS) {
-    return _MacosWindowEffects;
-  }
-
-  return [];
-}
-
 class Settings extends StatefulWidget {
   final VoidCallback? onBackPressed;
   const Settings({super.key, this.onBackPressed});
@@ -91,11 +45,6 @@ class _SettingsState extends State<Settings> with PageMixin {
     const spacer = SizedBox(height: 10.0);
     const biggerSpacer = SizedBox(height: 40.0);
 
-    // Only include English and Traditional Chinese (Taiwan) locales
-    final supportedLocales = [
-      const Locale('en'), // English
-      const Locale('zh', 'TW'), // Traditional Chinese (Taiwan)
-    ];
     final currentLocale =
         appTheme.locale ?? Localizations.maybeLocaleOf(context);
     return ScaffoldPage.scrollable(
@@ -106,7 +55,7 @@ class _SettingsState extends State<Settings> with PageMixin {
               icon: const Icon(FluentIcons.back, size: 20),
               onPressed: widget.onBackPressed,
               style: ButtonStyle(
-                padding: ButtonState.all(EdgeInsets.zero),
+                padding: WidgetStateProperty.all(EdgeInsets.zero),
               ),
             ),
             const SizedBox(width: 8),
@@ -115,10 +64,10 @@ class _SettingsState extends State<Settings> with PageMixin {
         ),
       ),
       children: [
-        // Theme mode and Navigation Pane Display Mode settings are hidden as requested
+        // Theme mode and Navigation Pane Display Mode settings are hidden as per requirements
         biggerSpacer,
         Text(
-          'Navigation Indicator',
+          context.tr('navigationIndicator'),
           style: FluentTheme.of(context).typography.subtitle,
         ),
         spacer,
@@ -132,35 +81,29 @@ class _SettingsState extends State<Settings> with PageMixin {
                 if (value) appTheme.indicator = mode;
               },
               content: Text(
-                mode.toString().replaceAll('NavigationIndicators.', ''),
+                context.tr(mode.toString().replaceAll('NavigationIndicators.', '').toLowerCase()),
               ),
             ),
           );
         }),
         biggerSpacer,
         Text(
-          'Accent Color',
+          context.tr('accentColor'),
           style: FluentTheme.of(context).typography.subtitle,
         ),
         spacer,
         Wrap(
-          children: [
-            Tooltip(
-              message: accentColorNames[0],
-              child: _buildColorBlock(appTheme, systemAccentColor),
-            ),
-            ...List.generate(Colors.accentColors.length, (index) {
-              final color = Colors.accentColors[index];
-              return Tooltip(
-                message: accentColorNames[index + 1],
-                child: _buildColorBlock(appTheme, color),
-              );
-            }),
-          ],
+          children: List.generate(Colors.accentColors.length, (index) {
+            final color = Colors.accentColors[index];
+            return Tooltip(
+              message: accentColorNames[index],
+              child: _buildColorBlock(appTheme, color),
+            );
+          }),
         ),
         biggerSpacer,
         Text(
-          'Text Direction',
+          context.tr('textDirection'),
           style: FluentTheme.of(context).typography.subtitle,
         ),
         spacer,
@@ -178,8 +121,8 @@ class _SettingsState extends State<Settings> with PageMixin {
               content: Text(
                 '$direction'
                     .replaceAll('TextDirection.', '')
-                    .replaceAll('rtl', 'Right to left')
-                    .replaceAll('ltr', 'Left to right'),
+                    .replaceAll('rtl', context.tr('rightToLeft'))
+                    .replaceAll('ltr', context.tr('leftToRight')),
               ),
             ),
           );
@@ -210,6 +153,36 @@ class _SettingsState extends State<Settings> with PageMixin {
                 }
               },
               content: const Text('繁體中文'),
+            ),
+            // Simplified Chinese
+            RadioButton(
+              checked: currentLocale?.languageCode == 'zh' && currentLocale?.countryCode == 'CN',
+              onChanged: (value) {
+                if (value) {
+                  appTheme.locale = const Locale('zh', 'CN');
+                }
+              },
+              content: const Text('简体中文'),
+            ),
+            // Korean
+            RadioButton(
+              checked: currentLocale?.languageCode == 'ko',
+              onChanged: (value) {
+                if (value) {
+                  appTheme.locale = const Locale('ko');
+                }
+              },
+              content: const Text('한국어'),
+            ),
+            // Japanese
+            RadioButton(
+              checked: currentLocale?.languageCode == 'ja',
+              onChanged: (value) {
+                if (value) {
+                  appTheme.locale = const Locale('ja');
+                }
+              },
+              content: const Text('日本語'),
             ),
           ],
         ),

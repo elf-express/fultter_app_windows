@@ -1,74 +1,91 @@
 import 'package:fluent_ui/fluent_ui.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart' hide Colors;
-import 'package:flutter_acrylic/flutter_acrylic.dart';
 import 'package:system_theme/system_theme.dart';
+
+import '../services/settings_service.dart';
 
 enum NavigationIndicators { sticky, end }
 
 class AppTheme extends ChangeNotifier {
-  static final lightTheme = FluentThemeData(
-    brightness: Brightness.light,
-    accentColor: Colors.blue,
-    // Add more theme configurations here
-  );
 
-  static final darkTheme = FluentThemeData(
-    brightness: Brightness.dark,
-    accentColor: Colors.blue,
-    // Add more theme configurations here
-  );
+  // 載入保存的設定
+  Future<void> loadSettings() async {
+    // 載入語言設定
+    final savedLocale = await SettingsService.getLocale();
+    if (savedLocale != null) {
+      _locale = savedLocale;
+    }
+    
+    // 載入導航指示器設定
+    _indicator = await SettingsService.getNavigationIndicator();
+    
+    // 載入強調色
+    final savedColor = await SettingsService.getAccentColor();
+    _color = Colors.accentColors.firstWhere(
+      (c) => c.normal == savedColor,
+      orElse: () => Colors.orange,
+    );
+    
+    // 載入文字方向
+    _textDirection = await SettingsService.getTextDirection();
+    
+    notifyListeners();
+  }
+
+  static FluentThemeData _buildThemeData(Brightness brightness, AccentColor accentColor) {
+    return FluentThemeData(
+      brightness: brightness,
+      accentColor: accentColor,
+      navigationPaneTheme: NavigationPaneThemeData(
+        highlightColor: accentColor,
+      ),
+      // Add more theme configurations here
+    );
+  }
+
+  FluentThemeData get lightTheme => _buildThemeData(Brightness.light, _color ?? Colors.orange);
+  FluentThemeData get darkTheme => _buildThemeData(Brightness.dark, _color ?? Colors.orange);
 
   AccentColor? _color;
-  AccentColor get color => _color ?? systemAccentColor;
+  AccentColor get color => _color ?? Colors.orange;
   set color(AccentColor color) {
+    if (_color == color) return;
     _color = color;
+    SettingsService.saveAccentColor(color.normal);
     notifyListeners();
   }
 
   ThemeMode _mode = ThemeMode.system;
   ThemeMode get mode => _mode;
   set mode(ThemeMode mode) {
+    if (_mode == mode) return;
     _mode = mode;
     notifyListeners();
   }
 
-  // Always use compact display mode
-  PaneDisplayMode get displayMode => PaneDisplayMode.compact;
-  
-  // Disable setting display mode since we want to keep it always compact
-  set displayMode(PaneDisplayMode _) {
-    // No-op to prevent changing the display mode
+  PaneDisplayMode _displayMode = PaneDisplayMode.compact;
+  PaneDisplayMode get displayMode => _displayMode;
+  set displayMode(PaneDisplayMode displayMode) {
+    if (_displayMode == displayMode) return;
+    _displayMode = displayMode;
+    notifyListeners();
   }
 
   NavigationIndicators _indicator = NavigationIndicators.sticky;
   NavigationIndicators get indicator => _indicator;
   set indicator(NavigationIndicators indicator) {
+    if (_indicator == indicator) return;
     _indicator = indicator;
+    SettingsService.saveNavigationIndicator(indicator);
     notifyListeners();
-  }
-
-  WindowEffect _windowEffect = WindowEffect.disabled;
-  WindowEffect get windowEffect => _windowEffect;
-  set windowEffect(WindowEffect windowEffect) {
-    _windowEffect = windowEffect;
-    notifyListeners();
-  }
-
-  void setEffect(WindowEffect effect, BuildContext context) {
-    Window.setEffect(
-      effect: effect,
-      color: [WindowEffect.solid, WindowEffect.acrylic].contains(effect)
-          ? FluentTheme.of(context).micaBackgroundColor.withValues(alpha: 0.05)
-          : Colors.transparent,
-      dark: FluentTheme.of(context).brightness.isDark,
-    );
   }
 
   TextDirection _textDirection = TextDirection.ltr;
   TextDirection get textDirection => _textDirection;
   set textDirection(TextDirection direction) {
+    if (_textDirection == direction) return;
     _textDirection = direction;
+    SettingsService.saveTextDirection(direction);
     notifyListeners();
   }
 
@@ -78,9 +95,10 @@ class AppTheme extends ChangeNotifier {
     _locale = locale;
     // Update text direction based on locale if needed
     if (locale != null) {
-      _textDirection = _isRTL(locale.languageCode) 
-          ? TextDirection.rtl 
+      _textDirection = _isRTL(locale.languageCode)
+          ? TextDirection.rtl
           : TextDirection.ltr;
+      SettingsService.saveLocale(locale); // 保存語言設定
     }
     notifyListeners();
   }

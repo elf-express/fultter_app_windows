@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'app_localizations_en.dart';
 import 'app_localizations_zh_tw.dart';
+import 'app_localizations_zh_cn.dart';
+import 'app_localizations_ko.dart';
+import 'app_localizations_ja.dart';
 
 class AppLocalizations {
   final Locale locale;
@@ -33,9 +36,17 @@ class AppLocalizations {
       case 'zh':
         if (locale.countryCode == 'TW') {
           _localizedStrings = zhTW;
+        } else if (locale.countryCode == 'CN') {
+          _localizedStrings = zhCN;
         } else {
           _localizedStrings = en;
         }
+        break;
+      case 'ko':
+        _localizedStrings = ko;
+        break;
+      case 'ja':
+        _localizedStrings = ja;
         break;
       default:
         _localizedStrings = en;
@@ -55,7 +66,7 @@ class _AppLocalizationsDelegate
 
   @override
   bool isSupported(Locale locale) {
-    return ['en', 'zh'].contains(locale.languageCode);
+    return ['en', 'zh', 'ko', 'ja'].contains(locale.languageCode);
   }
 
   @override

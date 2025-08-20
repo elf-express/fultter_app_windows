@@ -5,29 +5,30 @@ import 'package:provider/provider.dart';
 import 'screens/home_screen.dart';
 import 'localization/app_localizations.dart';
 
-void main() {
-  runApp(const MyApp());
+void main() async {
+  // 確保 Flutter 初始化完成
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // 創建主題實例並載入設定
+  final appTheme = app_theme.AppTheme();
+  await appTheme.loadSettings();
+
+  runApp(MyApp(appTheme: appTheme));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final app_theme.AppTheme appTheme;
+  const MyApp({super.key, required this.appTheme});
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider<app_theme.AppTheme>(
-      create: (context) => app_theme.AppTheme(),
+    return ChangeNotifierProvider<app_theme.AppTheme>.value(
+      value: appTheme,
       child: Consumer<app_theme.AppTheme>(
         builder: (context, appTheme, _) {
-          // Create theme with current accent color
-          final lightTheme = app_theme.AppTheme.lightTheme.copyWith(
-            brightness: Brightness.light,
-            accentColor: appTheme.color,
-          );
-          
-          final darkTheme = app_theme.AppTheme.darkTheme.copyWith(
-            brightness: Brightness.dark,
-            accentColor: appTheme.color,
-          );
+          // 使用 AppTheme 實例中的主題
+          final lightTheme = appTheme.lightTheme;
+          final darkTheme = appTheme.darkTheme;
           
           return FluentApp(
             title: 'My Flutter App',
@@ -41,9 +42,21 @@ class MyApp extends StatelessWidget {
               GlobalWidgetsLocalizations.delegate,
               GlobalCupertinoLocalizations.delegate,
             ],
+            localeResolutionCallback: (locale, supportedLocales) {
+              // 如果語言不支援，使用第一個支援的語言
+              for (var supportedLocale in supportedLocales) {
+                if (supportedLocale.languageCode == locale?.languageCode) {
+                  return supportedLocale;
+                }
+              }
+              return supportedLocales.first;
+            },
             supportedLocales: const [
               Locale('en', ''), // English
               Locale('zh', 'TW'), // Traditional Chinese (Taiwan)
+              Locale('zh', 'CN'), // Simplified Chinese (China)
+              Locale('ko', ''), // Korean
+              Locale('ja', ''), // Japanese
             ],
             // Apply text direction to the entire app
             builder: (context, child) {
