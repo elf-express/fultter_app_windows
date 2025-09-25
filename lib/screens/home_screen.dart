@@ -20,7 +20,7 @@ class HomeScreen extends StatefulWidget {
 class WebViewTab extends ChangeNotifier {
   final String id;
   final String title;
-  String url;  // Make this mutable
+  String url;
   final WebviewController controller;
   final GlobalKey webViewKey = GlobalKey();
   bool isInitialized = false;
@@ -30,11 +30,11 @@ class WebViewTab extends ChangeNotifier {
   LoadingState _loadingState = LoadingState.none;
   bool canGoBack = false;
   bool canGoForward = false;
-  String _currentUrl = '';  // Track current URL
-  
+  String _currentUrl = '';
+
   String get currentUrl => _currentUrl;
   LoadingState get loadingState => _loadingState;
-  
+
   set loadingState(LoadingState state) {
     if (_loadingState != state) {
       _loadingState = state;
@@ -44,8 +44,27 @@ class WebViewTab extends ChangeNotifier {
       notifyListeners();
     }
   }
-  
-  // Update current URL and notify listeners
+
+  // 檢查是否應該將 URL 添加到歷史記錄
+  bool _shouldAddToHistory(String currentUrl, String newUrl) {
+    final currentUri = Uri.tryParse(currentUrl);
+    final newUri = Uri.tryParse(newUrl);
+    
+    if (currentUri == null || newUri == null) return true;
+    
+    // 如果域名或路徑不同，則視為新頁面
+    if (currentUri.host != newUri.host || currentUri.path != newUri.path) {
+      return true;
+    }
+    
+    // 如果是同一個頁面，但查詢參數中有特定的追蹤參數，則不添加到歷史記錄
+    final trackingParams = ['utm_', 'ref_', 'fbclid', 'gclid', 'msclkid', 'yclid', 'zx='];
+    final hasTrackingParams = trackingParams.any((param) => newUrl.contains(param));
+    
+    return !hasTrackingParams;
+  }
+
+  // 更新當前 URL
   void updateCurrentUrl(String newUrl) {
     if (_currentUrl != newUrl) {
       _currentUrl = newUrl;
@@ -53,21 +72,64 @@ class WebViewTab extends ChangeNotifier {
     }
   }
 
-  @override
-  void notifyListeners() {
-    notifyListeners();
-  }
-
   WebViewTab({
     required this.id,
     required this.title,
     required this.url,
     required this.controller,
-  }) {
-    // Listen to loading state changes
+  }) : _currentUrl = url {
+    // 監聽加載狀態
     controller.loadingState.listen((state) {
       loadingState = state;
     });
+
+    // 監聽 URL 變化
+    controller.url.listen((newUrl) async {
+      if (newUrl == null || newUrl.isEmpty) return;
+
+      // 檢查是否應該添加到歷史記錄
+      if (_shouldAddToHistory(_currentUrl, newUrl)) {
+        // 檢查是否為新的 URL
+        if (historyIndex == -1 || (history.isNotEmpty && history[historyIndex] != newUrl)) {
+          // 如果當前不在歷史記錄的末尾，則移除後面的歷史記錄
+          if (historyIndex < history.length - 1) {
+            history.removeRange(historyIndex + 1, history.length);
+          }
+          
+          // 添加新的歷史記錄條目
+          history.add(newUrl);
+          historyIndex = history.length - 1;
+        }
+      }
+
+      // 更新 URL 和導航狀態
+      _currentUrl = newUrl;
+      canGoBack = historyIndex > 0;
+      canGoForward = historyIndex < history.length - 1;
+      notifyListeners();
+    });
+  }
+
+  // 導航到上一頁
+  void goBack() {
+    if (historyIndex > 0) {
+      historyIndex--;
+      controller.loadUrl(history[historyIndex]);
+      canGoBack = historyIndex > 0;
+      canGoForward = true;
+      notifyListeners();
+    }
+  }
+
+  // 導航到下一頁
+  void goForward() {
+    if (historyIndex < history.length - 1) {
+      historyIndex++;
+      controller.loadUrl(history[historyIndex]);
+      canGoBack = true;
+      canGoForward = historyIndex < history.length - 1;
+      notifyListeners();
+    }
   }
 }
 
@@ -147,7 +209,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _addNewTab(String title, String url) async {
     try {
       final controller = WebviewController();
-      
+
       // 先創建分頁但不要立即顯示
       final newTab = WebViewTab(
         id: const Uuid().v4(),
@@ -167,27 +229,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // 初始化控制器
       await controller.initialize();
-      
-      // 設置 URL 監聽器
-      controller.url.listen((newUrl) {
-        if (newTab.historyIndex == -1 || (newTab.history.isNotEmpty && newTab.history[newTab.historyIndex] != newUrl)) {
-          if (newTab.historyIndex < newTab.history.length - 1) {
-            newTab.history.removeRange(newTab.historyIndex + 1, newTab.history.length);
-          }
-          newTab.history.add(newUrl);
-          newTab.historyIndex = newTab.history.length - 1;
-        }
 
-        // 更新 URL 和導航狀態
-        newTab.updateCurrentUrl(newUrl);
-        newTab.canGoBack = newTab.historyIndex > 0;
-        newTab.canGoForward = newTab.historyIndex < newTab.history.length - 1;
-        newTab.notifyListeners();
-      });
+      // URL 監聽器已經在 WebViewTab 類別中設置
 
       // 載入 URL 並等待完成
       await controller.loadUrl(url);
-      
+
       // 確保控制器已準備好後再顯示
       if (mounted) {
         setState(() {
@@ -435,33 +482,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       children: [
                         IconButton(
                           icon: const Icon(FluentIcons.back),
-                          onPressed: currentTab.canGoBack
-                              ? () {
-                            if (currentTab.historyIndex > 0) {
-                              currentTab.historyIndex--;
-                              currentTab.controller.loadUrl(currentTab.history[currentTab.historyIndex]);
-                              // Force update the navigation state
-                              currentTab.canGoBack = currentTab.historyIndex > 0;
-                              currentTab.canGoForward = currentTab.historyIndex < currentTab.history.length - 1;
-                              currentTab.notifyListeners();
-                            }
-                          }
-                              : null,
+                          onPressed: currentTab.canGoBack ? currentTab.goBack : null,
                         ),
                         IconButton(
                           icon: const Icon(FluentIcons.forward),
-                          onPressed: currentTab.canGoForward
-                              ? () {
-                            if (currentTab.historyIndex < currentTab.history.length - 1) {
-                              currentTab.historyIndex++;
-                              currentTab.controller.loadUrl(currentTab.history[currentTab.historyIndex]);
-                              // Force update the navigation state
-                              currentTab.canGoBack = currentTab.historyIndex > 0;
-                              currentTab.canGoForward = currentTab.historyIndex < currentTab.history.length - 1;
-                              currentTab.notifyListeners();
-                            }
-                          }
-                              : null,
+                          onPressed: currentTab.canGoForward ? currentTab.goForward : null,
                         ),
                         IconButton(
                           icon: const Icon(FluentIcons.refresh),
@@ -480,15 +505,15 @@ class _HomeScreenState extends State<HomeScreen> {
                               builder: (context, _) {
                                 final currentTab = _tabs[_currentTabIndex];
                                 final urlController = TextEditingController(text: currentTab.currentUrl);
-                                
+
                                 return TextBox(
                                   controller: urlController,
                                   placeholder: '輸入網址或搜尋關鍵字',
                                   onSubmitted: (value) async {
                                     if (value.isEmpty) return;
-                                    
+
                                     String url = value.trim();
-                                    
+
                                     // If it's a valid URL, navigate to it
                                     if (url.contains('.') && !url.contains(' ')) {
                                       // Add https:// if no protocol is specified
@@ -506,7 +531,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                         // If URL parsing fails, treat as search
                                       }
                                     }
-                                    
+
                                     // If not a valid URL or contains spaces, treat as search
                                     final searchQuery = Uri.encodeComponent(url);
                                     final searchUrl = 'https://www.google.com/search?q=$searchQuery';
@@ -522,15 +547,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   prefix: const Padding(
                                     padding: EdgeInsets.only(left: 8.0, right: 8.0),
                                     child: Icon(FluentIcons.search, size: 16),
-                                  ),
-                                  suffix: currentTab.currentUrl.isNotEmpty
-                                      ? IconButton(
-                                          icon: const Icon(FluentIcons.clear, size: 16),
-                                          onPressed: () {
-                                            urlController.clear();
-                                          },
-                                        )
-                                      : null,
+                                  )
                                 );
                               },
                             ),
