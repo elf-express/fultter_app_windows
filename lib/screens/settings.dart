@@ -30,8 +30,8 @@ bool get kIsWindowEffectsSupported {
 }
 
 class Settings extends StatefulWidget {
-  final VoidCallback? onBackPressed;
-  const Settings({super.key, this.onBackPressed});
+  const Settings({super.key, this.onBack});
+  final VoidCallback? onBack;
 
   @override
   State<Settings> createState() => _SettingsState();
@@ -53,7 +53,17 @@ class _SettingsState extends State<Settings> with PageMixin {
           children: [
             IconButton(
               icon: const Icon(FluentIcons.back, size: 20),
-              onPressed: widget.onBackPressed,
+              onPressed: () {
+                if (widget.onBack != null) {
+                  widget.onBack!(); // 交給 HomeScreen 切回上一個 pane
+                  return;
+                }
+                // 後備機制：若未提供 onBack，嘗試 pop；不行就啥都不做
+                final nav = Navigator.of(context);
+                if (nav.canPop()) {
+                  nav.pop();
+                }
+              },
               style: ButtonStyle(
                 padding: WidgetStateProperty.all(EdgeInsets.zero),
               ),

@@ -1,761 +1,447 @@
-import 'dart:async';
 import 'dart:convert';
 import 'package:fluent_ui/fluent_ui.dart';
-import 'package:my_flutter_app/screens/settings.dart';
-import 'package:my_flutter_app/screens/works_screen.dart';
-import 'package:my_flutter_app/theme/app_theme.dart';
-import 'package:my_flutter_app/localization/app_localizations.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:webview_windows/webview_windows.dart';
 import 'package:uuid/uuid.dart';
+import 'package:my_flutter_app/widgets/keep_alive.dart';
 
+// 依你的專案實際路徑調整
+import 'package:my_flutter_app/theme/app_theme.dart';
+import 'package:my_flutter_app/localization/app_localizations.dart';
+import 'package:my_flutter_app/screens/settings.dart';
+import '../models/webview_item.dart';
+import 'home/home_area.dart';
+
+/// ------------------------------------------------------------
+/// HomeScreen（build = return NavigationView）
+/// - Home 分頁持久化
+/// - 工作區清單 + 各自最後網址持久化
+/// ------------------------------------------------------------
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class WebViewTab extends ChangeNotifier {
-  final String id;
-  final String title;
-  String url;
-  final WebviewController controller;
-  final GlobalKey webViewKey = GlobalKey();
-  bool isInitialized = false;
-  bool isVisible = false;
-  final List<String> history = [];
-  int historyIndex = -1;
-  LoadingState _loadingState = LoadingState.none;
-  bool canGoBack = false;
-  bool canGoForward = false;
-  String _currentUrl = '';
-
-  String get currentUrl => _currentUrl;
-  LoadingState get loadingState => _loadingState;
-
-  set loadingState(LoadingState state) {
-    if (_loadingState != state) {
-      _loadingState = state;
-      if (state == LoadingState.navigationCompleted) {
-        isInitialized = true;
-      }
-      notifyListeners();
-    }
-  }
-
-  // 檢查是否應該將 URL 添加到歷史記錄
-  bool _shouldAddToHistory(String currentUrl, String newUrl) {
-    final currentUri = Uri.tryParse(currentUrl);
-    final newUri = Uri.tryParse(newUrl);
-    
-    if (currentUri == null || newUri == null) return true;
-    
-    // 如果域名或路徑不同，則視為新頁面
-    if (currentUri.host != newUri.host || currentUri.path != newUri.path) {
-      return true;
-    }
-    
-    // 如果是同一個頁面，但查詢參數中有特定的追蹤參數，則不添加到歷史記錄
-    final trackingParams = ['utm_', 'ref_', 'fbclid', 'gclid', 'msclkid', 'yclid', 'zx='];
-    final hasTrackingParams = trackingParams.any((param) => newUrl.contains(param));
-    
-    return !hasTrackingParams;
-  }
-
-  // 更新當前 URL
-  void updateCurrentUrl(String newUrl) {
-    if (_currentUrl != newUrl) {
-      _currentUrl = newUrl;
-      notifyListeners();
-    }
-  }
-
-  WebViewTab({
-    required this.id,
-    required this.title,
-    required this.url,
-    required this.controller,
-  }) : _currentUrl = url {
-    // 監聽加載狀態
-    controller.loadingState.listen((state) {
-      loadingState = state;
-    });
-
-    // 監聽 URL 變化
-    controller.url.listen((newUrl) async {
-      if (newUrl == null || newUrl.isEmpty) return;
-
-      // 檢查是否應該添加到歷史記錄
-      if (_shouldAddToHistory(_currentUrl, newUrl)) {
-        // 檢查是否為新的 URL
-        if (historyIndex == -1 || (history.isNotEmpty && history[historyIndex] != newUrl)) {
-          // 如果當前不在歷史記錄的末尾，則移除後面的歷史記錄
-          if (historyIndex < history.length - 1) {
-            history.removeRange(historyIndex + 1, history.length);
-          }
-          
-          // 添加新的歷史記錄條目
-          history.add(newUrl);
-          historyIndex = history.length - 1;
-        }
-      }
-
-      // 更新 URL 和導航狀態
-      _currentUrl = newUrl;
-      canGoBack = historyIndex > 0;
-      canGoForward = historyIndex < history.length - 1;
-      notifyListeners();
-    });
-  }
-
-  // 導航到上一頁
-  void goBack() {
-    if (historyIndex > 0) {
-      historyIndex--;
-      controller.loadUrl(history[historyIndex]);
-      canGoBack = historyIndex > 0;
-      canGoForward = true;
-      notifyListeners();
-    }
-  }
-
-  // 導航到下一頁
-  void goForward() {
-    if (historyIndex < history.length - 1) {
-      historyIndex++;
-      controller.loadUrl(history[historyIndex]);
-      canGoBack = true;
-      canGoForward = historyIndex < history.length - 1;
-      notifyListeners();
-    }
-  }
-}
-
 class _HomeScreenState extends State<HomeScreen> {
-  String selectedContact = '';
-  bool showSettings = false;
+  // 左側選擇：0=Home；1..N=工作區；Settings 在 footer
   int _selectedIndex = 0;
 
-  // Controllers for the new workspace dialog
+  // Home tabs
+  final List<WebViewItem> _homeTabs = [];
+  int _currentHomeTab = 0;
+
+  // 工作區（title -> lastUrl）
+  final Map<String, String> _workspaces = {};
+
+  // 新增工作區 dialog
   final _nameController = TextEditingController();
   final _urlController = TextEditingController();
 
-  // Tab management
-  final List<WebViewTab> _tabs = [];
-  int _currentTabIndex = -1;
-
-  // Fixed home page
-  final Map<String, String> _fixedItems = {
-    'Home': 'https://www.google.com',
-  };
-
-  // Map to store custom workspaces
-  late Map<String, String> _customWorkspaces = {};
-  final String _workspacesKey = 'saved_workspaces';
-
-  // Combined navigation items (fixed + custom)
-  Map<String, String> get _navItems {
-    return {..._fixedItems, ..._customWorkspaces};
-  }
+  static const _prefsHomeTabsKey = 'home_tabs_v2';
+  static const _prefsWorkspacesKey = 'workspaces_v1'; // 新增：工作區持久化 key
 
   @override
   void initState() {
     super.initState();
-    _loadWorkspaces();
+    _bootstrap();
   }
 
-  // 從 SharedPreferences 載入工作區
-  Future<void> _loadWorkspaces() async {
+  Future<void> _bootstrap() async {
+    await Future.wait([
+      _loadHomeTabs(),
+      _loadWorkspaces(),
+    ]);
+
+    // 若 Home 沒有分頁，給一個預設
+    if (_homeTabs.isEmpty) {
+      _addHomeTab('新分頁 1', 'https://www.google.com', select: true);
+    }
+  }
+
+  int get _settingsPaneIndex {
+    // items: Home(1) + _workspaces.length
+    final itemsCount = 1 + _workspaces.length;
+    // footer: [PaneItemAction(新增工作區), PaneItemSeparator(), PaneItem(Settings)]
+    // NavigationPane 的 index 會把這兩個也算進去，所以 +2 就是 Settings 的索引
+    return itemsCount + 2;
+  }
+
+  // -------- 持久化：Home tabs --------
+  Future<void> _loadHomeTabs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_prefsHomeTabsKey);
+      if (raw == null || raw.isEmpty) return;
+      final list = (jsonDecode(raw) as List)
+          .cast<Map<String, dynamic>>()
+          .map((e) => WebViewItem(
+        id: e['id'] as String,
+        title: ((e['title'] as String?) ?? '').trim().isEmpty ? '新分頁' : e['title'] as String,
+        url: ((e['url'] as String?) ?? '').isEmpty ? 'https://www.google.com' : e['url'] as String,
+      ))
+          .toList();
+      setState(() {
+        _homeTabs.addAll(list);
+        _currentHomeTab = 0;
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _saveHomeTabs() async {
     final prefs = await SharedPreferences.getInstance();
-    final workspacesJson = prefs.getString(_workspacesKey);
+    final toSave = _homeTabs.map((e) => {'id': e.id, 'title': e.title, 'url': e.currentUrl}).toList();
+    await prefs.setString(_prefsHomeTabsKey, jsonEncode(toSave));
+  }
 
+  void _addHomeTab(String title, String url, {bool select = true}) {
     setState(() {
-      if (workspacesJson != null) {
-        // 載入已儲存的工作區
-        final decoded = Map<String, dynamic>.from(
-            Map<String, dynamic>.from(jsonDecode(workspacesJson))
-        );
-        _customWorkspaces =
-            decoded.map((key, value) => MapEntry(key, value.toString()));
-      } else {
-        _customWorkspaces = {};
-      }
-
-      // Open the first tab if none is open
-      if (_tabs.isEmpty && _navItems.isNotEmpty) {
-        final firstItem = _navItems.entries.first;
-        _addNewTab(firstItem.key, firstItem.value);
+      _homeTabs.add(WebViewItem(id: const Uuid().v4(), title: title, url: url));
+      if (select) {
+        _currentHomeTab = _homeTabs.length - 1;
+        _selectedIndex = 0;
       }
     });
+    _saveHomeTabs();
   }
 
-  // Save custom workspaces to SharedPreferences
+  void _closeHomeTab(int index) {
+    if (_homeTabs.length <= 1) return;
+    setState(() {
+      _homeTabs.removeAt(index);
+      if (_currentHomeTab >= _homeTabs.length) _currentHomeTab = _homeTabs.length - 1;
+    });
+    _saveHomeTabs();
+  }
+
+  Widget _buildHomeWebView(WebViewItem item) {
+    return InAppWebView(
+      key: PageStorageKey(item.id),
+      initialUrlRequest: URLRequest(url: WebUri(item.initialUrl)),
+
+      onWebViewCreated: (controller) => {
+        item.setController(controller)
+      },
+      onTitleChanged: (controller, t) => item.updateTitle(t),
+      onLoadStart: (controller, url) async {
+        item.updateCurrentUrl(url?.toString() ?? item.initialUrl);
+        await item.refreshNavState();
+      },
+      onLoadStop: (controller, url) async {
+        item.updateCurrentUrl(url?.toString() ?? item.initialUrl);
+        await item.refreshNavState();
+        _saveHomeTabs(); // 停止時保存
+      },
+      onProgressChanged: (controller, progress) async {
+        if (progress == 100) await item.refreshNavState();
+      },
+    );
+  }
+
+  // -------- 持久化：Workspaces --------
+  Future<void> _loadWorkspaces() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_prefsWorkspacesKey);
+      if (raw == null || raw.isEmpty) return;
+      // 儲存成 Map<String,String>
+      final map = Map<String, dynamic>.from(jsonDecode(raw));
+      setState(() {
+        _workspaces
+          ..clear()
+          ..addAll(map.map((k, v) => MapEntry(k, v.toString())));
+      });
+    } catch (_) {}
+  }
+
   Future<void> _saveWorkspaces() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_workspacesKey, jsonEncode(_customWorkspaces));
+    await prefs.setString(_prefsWorkspacesKey, jsonEncode(_workspaces));
   }
 
-  @override
-  void dispose() {
-    // Dispose all web view controllers when the widget is disposed
-    for (var tab in _tabs) {
-      tab.controller.dispose();
-    }
-    super.dispose();
-  }
-
-  Future<void> _addNewTab(String title, String url) async {
-    try {
-      final controller = WebviewController();
-
-      // 先創建分頁但不要立即顯示
-      final newTab = WebViewTab(
-        id: const Uuid().v4(),
-        title: title,
-        url: url,
-        controller: controller,
-      );
-
-      // 先將分頁添加到列表（但保持不可見）
-      if (mounted) {
-        setState(() {
-          _tabs.add(newTab);
-          _currentTabIndex = _tabs.length - 1;
-          // 先不設置 isVisible = true
-        });
-      }
-
-      // 初始化控制器
-      await controller.initialize();
-
-      // URL 監聽器已經在 WebViewTab 類別中設置
-
-      // 載入 URL 並等待完成
-      await controller.loadUrl(url);
-
-      // 確保控制器已準備好後再顯示
-      if (mounted) {
-        setState(() {
-          newTab.isInitialized = true;
-          newTab.isVisible = true;
-        });
-      }
-    } catch (e) {
-      debugPrint('Error creating web view: $e');
-      if (mounted) {
-        setState(() {
-          _tabs.removeWhere((tab) => tab.title == title && tab.url == url);
-          if (_currentTabIndex >= _tabs.length) {
-            _currentTabIndex = _tabs.length - 1;
-          }
-        });
-      }
-    }
-  }
-
-  void _closeTab(int index) {
+  void _updateWorkspaceUrl(String title, String url) {
+    if (_workspaces[title] == url) return;
     setState(() {
-      _tabs.removeAt(index);
-      if (_currentTabIndex >= _tabs.length) {
-        _currentTabIndex = _tabs.length - 1;
-      }
+      _workspaces[title] = url;
     });
+    _saveWorkspaces();
   }
 
+  // 新增 / 刪除 工作區
   Future<void> _showAddWorkspaceDialog() async {
     _nameController.clear();
     _urlController.clear();
-
-    final result = await showDialog<bool>(
+    final ok = await showDialog<bool>(
       context: context,
       builder: (context) => ContentDialog(
         title: Text(context.tr('newWorkspace')),
-        content: SizedBox(
-          width: 400,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                context.tr('workspaceNameLabel'),
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-              ),
-              const SizedBox(height: 4),
-              TextBox(
-                controller: _nameController,
-                placeholder: context.tr('workspaceNameLabel'),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                context.tr('workspaceUrlLabel'),
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-              ),
-              const SizedBox(height: 4),
-              TextBox(
-                controller: _urlController,
-                placeholder: 'https://example.com',
-              ),
-            ],
-          ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextBox(controller: _nameController, placeholder: 'Name'),
+            const SizedBox(height: 8),
+            TextBox(controller: _urlController, placeholder: 'https://example.com'),
+          ],
         ),
         actions: [
-          Button(
-            child: Text(context.tr('cancel')),
-            onPressed: () => Navigator.pop(context, false),
-          ),
-          FilledButton(
-            child: Text(context.tr('add')),
-            onPressed: () {
-              if (_nameController.text.isNotEmpty && _urlController.text.isNotEmpty) {
-                Navigator.pop(context, true);
-              }
-            },
-          ),
+          Button(child: Text(context.tr('cancel')), onPressed: () => Navigator.pop(context, false)),
+          FilledButton(child: Text(context.tr('add')), onPressed: () => Navigator.pop(context, true)),
         ],
       ),
     );
 
-    if (result == true) {
-      // Add the new workspace to navigation items
-      final name = _nameController.text;
-      final url = _urlController.text;
-
-      // Ensure URL has a scheme
-      var finalUrl = url.trim();
-      if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
-        finalUrl = 'https://$finalUrl';
-      }
-
+    if (ok == true && _nameController.text.trim().isNotEmpty && _urlController.text.trim().isNotEmpty) {
+      var u = _toNavigable(_urlController.text.trim());
       setState(() {
-        _customWorkspaces[name] = finalUrl;
-        // Save to SharedPreferences
-        _saveWorkspaces();
-        // Select the newly added workspace
-        _selectedIndex = _navItems.length - 1;
+        _workspaces[_nameController.text.trim()] = u;
+        _selectedIndex = 1 + _workspaces.keys.toList().indexOf(_nameController.text.trim());
       });
+      _saveWorkspaces();
     }
+  }
+
+  void _removeWorkspace(String title) {
+    setState(() {
+      final idxInNav = 1 + _workspaces.keys.toList().indexOf(title);
+      final wasSelected = _selectedIndex == idxInNav;
+      _workspaces.remove(title);
+      if (wasSelected) _selectedIndex = 0;
+    });
+    _saveWorkspaces();
+  }
+
+  String _toNavigable(String raw) {
+    var u = raw.trim();
+    if (!(u.startsWith('http://') || u.startsWith('https://'))) {
+      if (u.contains(' ') || !u.contains('.')) {
+        final q = Uri.encodeComponent(u);
+        u = 'https://www.google.com/search?q=$q';
+      } else {
+        u = 'https://$u';
+      }
+    }
+    return u;
   }
 
   @override
   Widget build(BuildContext context) {
     final appTheme = context.watch<AppTheme>();
 
-    return Column(
-      children: [
-        Expanded(
-          child: NavigationView(
-            appBar: null,
-            pane: NavigationPane(
-              selected: _selectedIndex,
-              onChanged: (index) {
-                setState(() {
-                  _selectedIndex = index;
-                  // 如果是設置頁面，顯示設置內容
-                  if (index == _navItems.length) {
-                    showSettings = true;
-                  } else {
-                    showSettings = false;
-                    // 切換到對應的 tab
-                    if (_tabs.isNotEmpty && index < _tabs.length) {
-                      _currentTabIndex = index;
-                    }
-                  }
-                });
-              },
-              displayMode: appTheme.displayMode,
-              indicator: () {
-                switch (appTheme.indicator) {
-                  case NavigationIndicators.sticky:
-                    return const StickyNavigationIndicator();
-                  case NavigationIndicators.end:
-                    return const EndNavigationIndicator();
-                }
-              }(),
-              size: const NavigationPaneSize(
-                openMaxWidth: 250,
-                openMinWidth: 200,
+    // *** 佈局維持：直接 return NavigationView ***
+    return NavigationView(
+      appBar: null,
+      pane: NavigationPane(
+        selected: _selectedIndex,
+        onChanged: (i) {
+          setState(() {
+            _selectedIndex = i;
+            if (i != _settingsPaneIndex) {
+            }
+          });
+        },
+        displayMode: appTheme.displayMode,
+        indicator: () {
+          switch (appTheme.indicator) {
+            case NavigationIndicators.sticky:
+              return const StickyNavigationIndicator();
+            case NavigationIndicators.end:
+              return const EndNavigationIndicator();
+          }
+        }(),
+        size: const NavigationPaneSize(openMinWidth: 200, openMaxWidth: 260),
+        header: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Text(
+            context.tr('appTitle'),
+            style: FluentTheme.of(context).typography.bodyStrong?.copyWith(
+              color: FluentTheme.of(context).accentColor,
+            ),
+          ),
+        ),
+        items: [
+          // Home
+          PaneItem(
+            icon: const Icon(FluentIcons.home),
+            title: const Text('Home'),
+            body: KeepAliveWrapper(
+              child: HomeArea(
+                tabs: _homeTabs,
+                currentIndex: _currentHomeTab,
+                onSelect: (i) {
+                  setState(() {
+                    _currentHomeTab = i.clamp(0, _homeTabs.length - 1);
+                    _selectedIndex = 0;
+                  });
+                  _saveHomeTabs();
+                },
+                onAdd: () {
+                  final newTitle = '新分頁 ${_homeTabs.length + 1}';
+                  _addHomeTab(newTitle, 'https://www.google.com', select: true);
+                },
+                onClose: _closeHomeTab,
+                buildWebView: _buildHomeWebView,
+                onUrlSubmitted: (item, raw) async {
+                  final u = _toNavigable(raw);
+                  await item.load(u);
+                },
               ),
-              header: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                alignment: Alignment.centerLeft,
-                constraints: const BoxConstraints(minHeight: 40),
-                child: Text(
-                  context.tr('appTitle'),
-                  style: FluentTheme.of(context).typography.bodyStrong?.copyWith(
-                    color: FluentTheme.of(context).accentColor,
-                  ),
+            ),
+          ),
+
+          // 工作區（不顯示網址列；每個工作區最後網址會被記住）
+          ..._workspaces.entries.map((e) {
+            return PaneItem(
+              icon: const Icon(FluentIcons.globe),
+              title: Text(e.key),
+              body: KeepAliveWrapper(
+                child: WorkspaceArea(
+                  title: e.key,
+                  initialUrl: e.value,
+                  onUrlChanged: (u) => _updateWorkspaceUrl(e.key, u), // ← 變更即寫回
                 ),
               ),
-              items: [
-                // 首頁項目
-                PaneItem(
-                  icon: const Icon(FluentIcons.home),
-                  title: Text(_fixedItems.keys.first),
-                  body: _buildMainContent(),
-                  onTap: () {
-                    setState(() {
-                      _selectedIndex = 0;
-                      showSettings = false;
-                    });
-                  },
-                ),
-                // 工作區項目
-                ..._customWorkspaces.entries.map<NavigationPaneItem>((entry) {
-                  final title = entry.key;
-                  final url = entry.value;
-                  return PaneItem(
-                    icon: const Icon(FluentIcons.globe),
-                    title: Text(title),
-                    body: WorksScreen(title: title, url: url),
-                    onTap: () {
-                      setState(() {
-                        _selectedIndex = _navItems.keys.toList().indexOf(title);
-                        showSettings = false;
-                      });
-                    },
-                    trailing: IconButton(
-                      icon: const Icon(FluentIcons.delete, size: 16),
-                      style: ButtonStyle(
-                        padding: WidgetStateProperty.all(EdgeInsets.zero),
-                        iconSize: WidgetStateProperty.all(16),
-                      ),
-                      onPressed: () {
-                        setState(() {
-                          _customWorkspaces.remove(title);
-                          _saveWorkspaces();
-                          // If the deleted workspace was selected, go back to home
-                          if (_selectedIndex > 0 &&
-                              _selectedIndex < _navItems.length &&
-                              _navItems.entries.elementAt(_selectedIndex).key == title) {
-                            _selectedIndex = 0;
-                          }
-                        });
-                        return;
-                      },
+              trailing: IconButton(
+                icon: const Icon(FluentIcons.delete, size: 16),
+                onPressed: () async {
+                  final confirm = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => ContentDialog(
+                      title: const Text('確認刪除'),
+                      content: Text('確定要刪除工作區 "${e.key}" 嗎？此動作無法復原。'),
+                      actions: [
+                        Button(
+                          child: const Text('取消'),
+                          onPressed: () => Navigator.pop(context, false),
+                        ),
+                        FilledButton(
+                          child: const Text('刪除', style: TextStyle(color: Colors.white)),
+                          onPressed: () => Navigator.pop(context, true),
+                        ),
+                      ],
                     ),
                   );
-                }),
-              ],
-              footerItems: <NavigationPaneItem>[
-                PaneItemAction(
-                  icon: const Icon(FluentIcons.add),
-                  title: Text(context.tr('newWorkspace')),
-                  onTap: _showAddWorkspaceDialog,
-                ),
-                PaneItemSeparator(),
-                PaneItem(
-                  icon: const Icon(FluentIcons.settings),
-                  title: Text(context.tr('settings')),
-                  body: Settings(
-                    onBackPressed: () => setState(() {
-                      _selectedIndex = 0;
-                      showSettings = false;
-                    }),
-                  ),
-                ),
-              ],
+
+                  if (confirm == true) {
+                    if (mounted) {
+                      _removeWorkspace(e.key);
+                    }
+                  }
+                },
+              ),
+            );
+          }),
+        ],
+        footerItems: [
+          PaneItemAction(
+            icon: const Icon(FluentIcons.add),
+            title: Text(context.tr('newWorkspace')),
+            onTap: _showAddWorkspaceDialog,
+          ),
+          PaneItemSeparator(),
+          PaneItem(
+            icon: const Icon(FluentIcons.settings),
+            title: Text(context.tr('settings')),
+            body: KeepAliveWrapper(
+              child: Settings(
+                onBack: () {
+                  setState(() {
+                    _selectedIndex = 0; // 固定返回到首頁
+                  });
+                },
+              ),
             ),
           ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildMainContent() {
-    return Column(
-      children: [
-        _buildTabBar(),
-
-        if (_tabs.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0),
-            child: ListenableBuilder(
-              listenable: _tabs.isNotEmpty ? _tabs[_currentTabIndex] : ValueNotifier(null),
-              builder: (context, _) {
-                final currentTab = _tabs[_currentTabIndex];
-                return SizedBox(
-                  width: double.infinity,
-                  height: 40,
-                  child: Row(
-                      children: [
-                        IconButton(
-                          icon: const Icon(FluentIcons.back),
-                          onPressed: currentTab.canGoBack ? currentTab.goBack : null,
-                        ),
-                        IconButton(
-                          icon: const Icon(FluentIcons.forward),
-                          onPressed: currentTab.canGoForward ? currentTab.goForward : null,
-                        ),
-                        IconButton(
-                          icon: const Icon(FluentIcons.refresh),
-                          onPressed: () {
-                            final controller = _tabs[_currentTabIndex].controller;
-                            controller.reload();
-                          },
-                        ),
-                        const SizedBox(width: 8),
-                        // URL input field
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                            child: ListenableBuilder(
-                              listenable: _tabs[_currentTabIndex],
-                              builder: (context, _) {
-                                final currentTab = _tabs[_currentTabIndex];
-                                final urlController = TextEditingController(text: currentTab.currentUrl);
-
-                                return TextBox(
-                                  controller: urlController,
-                                  placeholder: '輸入網址或搜尋關鍵字',
-                                  onSubmitted: (value) async {
-                                    if (value.isEmpty) return;
-
-                                    String url = value.trim();
-
-                                    // If it's a valid URL, navigate to it
-                                    if (url.contains('.') && !url.contains(' ')) {
-                                      // Add https:// if no protocol is specified
-                                      if (!url.startsWith('http://') && !url.startsWith('https://')) {
-                                        url = 'https://$url';
-                                      }
-                                      // Check if it's a valid URL
-                                      try {
-                                        final uri = Uri.parse(url);
-                                        if (uri.host.isNotEmpty) {
-                                          await currentTab.controller.loadUrl(url);
-                                          return;
-                                        }
-                                      } catch (e) {
-                                        // If URL parsing fails, treat as search
-                                      }
-                                    }
-
-                                    // If not a valid URL or contains spaces, treat as search
-                                    final searchQuery = Uri.encodeComponent(url);
-                                    final searchUrl = 'https://www.google.com/search?q=$searchQuery';
-                                    await currentTab.controller.loadUrl(searchUrl);
-                                  },
-                                  onTap: () {
-                                    // Select all text when clicking on the TextBox
-                                    urlController.selection = TextSelection(
-                                      baseOffset: 0,
-                                      extentOffset: urlController.text.length,
-                                    );
-                                  },
-                                  prefix: const Padding(
-                                    padding: EdgeInsets.only(left: 8.0, right: 8.0),
-                                    child: Icon(FluentIcons.search, size: 16),
-                                  )
-                                );
-                              },
-                            ),
-                          ),
-                        )
-                      ]
-                  )
-                  ,
-                );
-              },
-            ),
-          ),
-        Expanded(
-          child: _tabs.isEmpty
-              ? const Center(child: Text('No tabs open. Click a navigation item to open a new tab.'))
-              : _buildCurrentTab(),
-        ),
-      ],
-    );
-  }
-
-  // 首頁分頁列
-  // 新增分頁的方法
-  void _addNewTabFromButton() {
-    final newTabIndex = _tabs.length + 1;
-    _addNewTab(
-      '新分頁 $newTabIndex',
-      'https://www.google.com',
-    );
-  }
-
-  Widget _buildTabBar() {
-    return Row(
-      children: [
-        Expanded(
-          child: _buildTabBarContent(
-            tabs: _tabs,
-            currentIndex: _currentTabIndex,
-            onTabSelected: (index) {
-              setState(() {
-                _currentTabIndex = index;
-              });
-            },
-            onTabClosed: _closeTab,
-          ),
-        ),
-        // 新增分頁按鈕
-        Container(
-          margin: const EdgeInsets.only(left: 8.0, right: 8.0),
-          child: IconButton(
-            icon: const Icon(FluentIcons.add, size: 16),
-            style: ButtonStyle(
-              iconSize: WidgetStateProperty.all(16),
-              backgroundColor: WidgetStateProperty.resolveWith<Color>((states) {
-                return Colors.transparent;
-              }),
-            ),
-            onPressed: _addNewTabFromButton,
-          ),
-        ),
-      ],
-    );
-  }
-
-  // 共用的分頁列 UI
-  Widget _buildTabBarContent({
-    required List<WebViewTab> tabs,
-    required int currentIndex,
-    required Function(int) onTabSelected,
-    required Function(int) onTabClosed,
-  }) {
-    if (tabs.isEmpty) return const SizedBox.shrink();
-
-    return Container(
-      height: 40,
-      padding: const EdgeInsets.only(top: 6.0, left: 8.0, right: 8.0),
-      color: Colors.grey[20],
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        itemCount: tabs.length,
-        itemBuilder: (context, index) {
-          final tab = tabs[index];
-          final isSelected = currentIndex == index;
-
-          return ListenableBuilder(
-            listenable: tab,
-            builder: (context, _) {
-              return Container(
-                margin: const EdgeInsets.only(
-                  right: 2.0,
-                  top: 2.0,
-                  bottom: 1.0,
-                ),
-                decoration: BoxDecoration(
-                  color: isSelected ? Colors.white : Colors.grey[30],
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(6.0),
-                    topRight: Radius.circular(6.0),
-                  ),
-                  boxShadow: isSelected ? [
-                    BoxShadow(
-                      color: Colors.black.withAlpha(26),
-                      blurRadius: 2,
-                      offset: const Offset(0, 1),
-                    )
-                  ] : null,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Tab content area
-                    SizedBox(
-                      width: 120,
-                      child: Button(
-                        style: ButtonStyle(
-                          backgroundColor: WidgetStateProperty.all(Colors.transparent),
-                          padding: WidgetStateProperty.all(const EdgeInsets.symmetric(horizontal: 8.0)),
-                          elevation: WidgetStateProperty.all(0),
-                          shadowColor: WidgetStateProperty.all(Colors.transparent),
-                          shape: WidgetStateProperty.all(RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(4.0),
-                            side: BorderSide.none,
-                          )),
-                        ),
-                        onPressed: () => onTabSelected(index),
-                        child: Row(
-                          children: [
-                            SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: tab.loadingState == LoadingState.loading
-                                  ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: ProgressRing(
-                                  strokeWidth: 2.0,
-                                  value: null,
-                                ),
-                              )
-                                  : const Icon(FluentIcons.globe, size: 14),
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                tab.title,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: isSelected ? Colors.black : Colors.black.withAlpha(150),
-                                  fontSize: 13,
-                                  fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    // Close button
-                    SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: IconButton(
-                        icon: Icon(
-                          FluentIcons.chrome_close,
-                          size: 14,
-                          color: Colors.grey[130],
-                        ),
-                        onPressed: () => onTabClosed(index),
-                        style: ButtonStyle(
-                          padding: WidgetStateProperty.all(EdgeInsets.zero),
-                          iconSize: WidgetStateProperty.all(14),
-                          backgroundColor: WidgetStateProperty.resolveWith<Color>((states) {
-                            if (states.contains(WidgetState.hovered)) {
-                              return Colors.grey[100];
-                            }
-                            return Colors.transparent;
-                          }),
-                          shape: WidgetStateProperty.all(const CircleBorder()),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildCurrentTab() {
-    if (_currentTabIndex < 0 || _currentTabIndex >= _tabs.length) {
-      return const Center(child: Text('No tab selected'));
-    }
-
-    final tab = _tabs[_currentTabIndex];
-
-    return SizedBox.expand(
-      child: Stack(
-        children: [
-          // WebView - Only show if the tab is marked as visible
-          if (tab.isVisible)
-            Positioned.fill(
-              child: Webview(tab.controller),
-            ),
         ],
       ),
+    );
+  }
+}
+
+/// ------------------------------------------------------------
+/// WorkspaceArea：不顯示網址列，只顯示 上/下頁/重整；
+/// 透過 onUrlChanged 回傳目前 URL 給上層做持久化。
+/// ------------------------------------------------------------
+class WorkspaceArea extends StatefulWidget {
+  final String title;
+  final String initialUrl;
+  final ValueChanged<String>? onUrlChanged; // ← 新增：告知父層目前網址（持久化用）
+
+  const WorkspaceArea({
+    super.key,
+    required this.title,
+    required this.initialUrl,
+    this.onUrlChanged,
+  });
+
+  @override
+  State<WorkspaceArea> createState() => _WorkspaceAreaState();
+}
+
+class _WorkspaceAreaState extends State<WorkspaceArea> with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  late final WebViewItem _item =
+  WebViewItem(id: 'ws_${widget.title}', title: widget.title, url: widget.initialUrl);
+
+  void _emitUrl(String? url) {
+    final u = (url ?? _item.initialUrl);
+    widget.onUrlChanged?.call(u);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return Column(
+      children: [
+        AnimatedBuilder(
+          animation: _item,
+          builder: (context, _) {
+            return Container(
+              height: 44,
+              decoration: BoxDecoration(
+                color: Colors.grey[10],
+                border: Border(bottom: BorderSide(color: Colors.grey[60], width: 1)),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Row(
+                children: [
+                  IconButton(icon: const Icon(FluentIcons.back), onPressed: _item.canGoBack ? () => _item.back() : null),
+                  IconButton(icon: const Icon(FluentIcons.forward), onPressed: _item.canGoForward ? () => _item.forward() : null),
+                  IconButton(icon: const Icon(FluentIcons.refresh), onPressed: () => _item.controller?.reload()),
+                  const Spacer(),
+                ],
+              ),
+            );
+          },
+        ),
+        Expanded(child: _buildWebView(_item)),
+      ],
+    );
+  }
+
+  Widget _buildWebView(WebViewItem item) {
+    return InAppWebView(
+      key: PageStorageKey(item.id),
+      initialUrlRequest: URLRequest(url: WebUri(item.initialUrl)),
+      onWebViewCreated: (controller) => item.setController(controller),
+      onTitleChanged: (controller, t) => item.updateTitle(t),
+      onLoadStart: (controller, url) async {
+        final u = url?.toString() ?? item.initialUrl;
+        item.updateCurrentUrl(u);
+        _emitUrl(u);               // 告知父層目前網址（即時更新）
+        await item.refreshNavState();
+      },
+      onLoadStop: (controller, url) async {
+        final u = url?.toString() ?? item.initialUrl;
+        item.updateCurrentUrl(u);
+        _emitUrl(u);               // 告知父層目前網址（確保停在此頁）
+        await item.refreshNavState();
+      },
+      onProgressChanged: (controller, progress) async {
+        if (progress == 100) await item.refreshNavState();
+      },
     );
   }
 }

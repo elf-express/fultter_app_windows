@@ -2,9 +2,17 @@
 cmake_minimum_required(VERSION 3.14)
 project(my_flutter_app LANGUAGES CXX)
 
+# 讓 MSVC 以 UTF-8 讀取所有 .cc/.cpp/.h 檔
+if(MSVC)
+  add_compile_options(/utf-8)   # 用 UTF-8 解析原始碼
+  add_compile_options(/WX-)     # （可選）不要把所有警告當錯誤
+  # （可選）如果仍看到 4819，可單獨關掉那個警告：
+  add_compile_options(/wd4819)
+endif()
+
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
-set(BINARY_NAME "my_flutter_app")
+set(BINARY_NAME "WebArk")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
@@ -39,7 +47,7 @@ add_definitions(-DUNICODE -D_UNICODE)
 # of modifying this function.
 function(APPLY_STANDARD_SETTINGS TARGET)
   target_compile_features(${TARGET} PUBLIC cxx_std_17)
-  target_compile_options(${TARGET} PRIVATE /W4 /WX /wd"4100")
+  target_compile_options(${TARGET} PRIVATE /W4 /WX- /wd"4100")
   target_compile_options(${TARGET} PRIVATE /EHsc)
   target_compile_definitions(${TARGET} PRIVATE "_HAS_EXCEPTIONS=0")
   target_compile_definitions(${TARGET} PRIVATE "$<$<CONFIG:Debug>:_DEBUG>")
